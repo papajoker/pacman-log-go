@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -34,6 +37,7 @@ func main() {
 	logFileName := logFile
 	verArg := flag.Bool("v", false, "Version")
 	clearArg := flag.Bool("c", false, "Clear log")
+	getCalendar := flag.Bool("a", false, "get calendar")
 	pkgArg := flag.String("p", "", "Package to find")
 	dateArg := flag.String("d", "", "Date filter (YYYY-MM-DD)")
 	fileArg := flag.String("f", "", "Pacman log file")
@@ -50,12 +54,41 @@ func main() {
 	if *clearArg {
 		defer os.Remove("/tmp/pacman.log")
 		fmt.Println("::pacman-log-clear\n ")
-		copyFile(logFileName, "/tmp/pacman.log")
+		CopyFile(logFileName, "/tmp/pacman.log")
 		convertFile("/tmp/pacman.log", logFileName)
 	}
 
 	if len(os.Args) > 1 && *pkgArg == "" && len(flag.Args()) > 0 {
 		*pkgArg = flag.Args()[0]
+	}
+
+	if *getCalendar {
+		cal := CalendarFile(logFileName)
+
+		max := 0
+		for _, v := range cal {
+			if v > max {
+				max = v
+			}
+		}
+		var keys []string
+		for k := range cal {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		//for key, value := range cal {
+		for _, k := range keys {
+			pourcent := (float64(cal[k]) * float64(100)) / float64(max)
+			//fmt.Print(k, COLOR_BLUE, cal[k], COLOR_NONE, pourcent) //, math.Round(pourcent))
+			fmt.Printf("%s \033[0;34m%4d\033[0m ", k, cal[k] /*, pourcent*/)
+			//for i := range int64(math.Round(math.Round(pourcent))) {
+			for i := 1; i <= int(math.Round(math.Round(pourcent))/1.5); i++ {
+				print("█")
+			}
+			println("")
+			//fmt.Printf(" %4.2f \n", pourcent)
+		}
+		fmt.Println("\nmax:", max, "packages in a day")
 	}
 
 	if *pkgArg != "" {
@@ -240,6 +273,45 @@ func parseFile(logFile string, fn fn, strFilter string) {
 	fmt.Println("\n::", transactions, "transactions  ", dates[0], " -> ", dates[1])
 }
 
+func CalendarFile(logFile string) (calendar map[string]int) {
+	//re := regexp.MustCompile(`.(?P<dat>.*)\]\s+\[(?P<verb>\S+)\]\s+(?P<txt>.*)`)
+	calendar = make(map[string]int)
+	now := time.Now().AddDate(0, -2, 0)
+	//calendar["2020-01-15"] = 0
+	//calendar["2020-01-25"] = 5
+
+	file, err := os.Open(logFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Index(line, "[ALPM] upgraded") > 0 ||
+			strings.Index(line, "[ALPM] reinstalled") > 0 ||
+			strings.Index(line, "[ALPM] downgraded") > 0 ||
+			strings.Index(line, "[ALPM] removed") > 0 ||
+			strings.Index(line, "[ALPM] installed") > 0 {
+			d := line[1:11]
+			if _, ok := calendar[d]; ok {
+				calendar[d]++
+			} else {
+				t, _ := time.Parse("2006-01-02", d)
+				if t.After(now) {
+					calendar[d] = 1
+				}
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
+	}
+
+	return calendar
+}
+
 func convertFile(rlog, wlog string) {
 
 	transactions := 0
@@ -290,8 +362,7 @@ func convertFile(rlog, wlog string) {
 				line = "\n" + line
 			}
 			fmt.Println(line)
-			_, err = datawriter.WriteString(line + "\n")
-			if err != nil {
+			if _, err = datawriter.WriteString(line + "\n"); err != nil {
 				log.Fatalf("failed write in file: %s", err)
 			}
 		}
@@ -305,7 +376,7 @@ func convertFile(rlog, wlog string) {
 	fmt.Println("\n::", transactions, "transactions")
 }
 
-func copyFile(src, dst string) error {
+func CopyFile(src, dst string) error {
 	source, err := os.Open(src)
 	if err != nil {
 		return err
